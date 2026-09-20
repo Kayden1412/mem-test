@@ -39,28 +39,40 @@ fn printGradeCount(
     }
 }
 
+fn printMemUsage(
+    io: std.Io,
+    writer: *Io.Writer,
+) !void {
+    const status = try Io.Dir.openFileAbsolute(io, "/proc/self/status", .{});
+    defer status.close(io);
+    var buf: [4096]u8 = undefined;
+    const n = try status.readPositionalAll(io, &buf, 0);
+
+    var iter = std.mem.splitScalar(u8, buf[0..n], '\n');
+    while (iter.next()) |line| if (std.mem.startsWith(u8, line, "Vm")) try writer.print("{s}\n", .{line});
+}
+
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     const gpa = arena.allocator();
     const io = init.io;
-
     var stdout_writer = Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
-
     var stderr_writer = Io.File.stderr().writer(io, &.{});
     const stderr = &stderr_writer.interface;
 
     var rand = std.Random.DefaultPrng.init(@intCast(std.Io.Timestamp.now(io, .real).toMicroseconds()));
     const rng = rand.random();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-
-    const count = std.fmt.parseInt(usize, if (args.len >= 2) args[1] else "100_000", 10) catch |err| {
+    const program_name = args[0];
+    const mode = std.meta.stringToEnum(enum { aos, soa, mal }, if (args.len >= 1) args[1] else "") orelse .aos;
+    const count = std.fmt.parseInt(usize, if (args.len >= 3) args[2] else "100_000", 10) catch |err| {
         switch (err) {
             error.InvalidCharacter => {
                 for (args[1], 0..) |c, i| {
                     if (!std.ascii.isDigit(c)) {
-                        try stderr.print("./dod {s}\n", .{args[1]});
-                        _ = try stderr.splatByte(' ', 6 + i);
+                        try stderr.print("./{s} {s}\n", .{ program_name, args[1] });
+                        _ = try stderr.splatByte(' ', program_name.len + 3 + i);
                         try stderr.writeAll("^\n");
                         try stderr.print("Invalid Char {c} at pos {d}\n", .{
                             c,
@@ -75,9 +87,17 @@ pub fn main(init: std.process.Init) !void {
         unreachable;
     };
 
-    try stdout.print("{d} Monsters\n", .{count});
+    try stdout.print(
+        \\Mode {s}
+        \\{d} Monsters
+        \\
+    , .{ switch (mode) {
+        .aos => "AOS",
+        .soa => "SOA",
+        .mal => "MultiArrayList",
+    }, count });
 
-    {
+    if (mode == .aos) {
         const mons = try gpa.alloc(Monster, count);
         var grade_arr: GradeArr = .initFill(0);
 
@@ -137,9 +157,10 @@ pub fn main(init: std.process.Init) !void {
         });
 
         try printGradeCount(grade_arr, stdout);
+        try printMemUsage(io, stdout);
     }
 
-    {
+    if (mode == .soa) {
         var mons: Monster.V2 = .{
             .level = try gpa.alloc(u32, count),
             .grade = try gpa.alloc(Monster.Grade, count),
@@ -221,9 +242,10 @@ pub fn main(init: std.process.Init) !void {
             avg_lvl,
         });
         try printGradeCount(grade_arr, stdout);
+        try printMemUsage(io, stdout);
     }
 
-    {
+    if (mode == .mal) {
         var mons: std.MultiArrayList(Monster) = try .initCapacity(gpa, count);
         var grade_arr: GradeArr = .initFill(0);
         defer {
@@ -282,5 +304,6 @@ pub fn main(init: std.process.Init) !void {
             avg_lvl,
         });
         try printGradeCount(grade_arr, stdout);
+        try printMemUsage(io, stdout);
     }
 }
