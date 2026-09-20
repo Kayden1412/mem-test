@@ -1,86 +1,10 @@
 const std = @import("std");
+const Io = std.Io;
+const Clock = Io.Clock;
 const GradeArr = std.EnumArray(Monster.Grade, usize);
 const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-";
 const N = 1e5;
 
-const CountingAllocator = struct {
-    child: std.mem.Allocator,
-    bytes_allocated: usize = 0,
-    alloc_count: usize = 0,
-    resize_count: usize = 0,
-    remap_count: usize = 0,
-
-    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .remap = remap,
-                .free = free,
-            },
-        };
-    }
-
-    fn alloc(
-        ctx: *anyopaque,
-        len: usize,
-        ptr_align: std.mem.Alignment,
-        ret_addr: usize,
-    ) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.bytes_allocated += len;
-        self.alloc_count += 1;
-        return self.child.vtable.alloc(self.child.ptr, len, ptr_align, ret_addr);
-    }
-
-    fn resize(
-        ctx: *anyopaque,
-        buf: []u8,
-        buf_align: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) bool {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        if (new_len > buf.len) {
-            self.bytes_allocated += new_len - buf.len; // nambah
-        } else {
-            self.bytes_allocated -= buf.len - new_len; // ngurang
-        }
-        self.resize_count += 1;
-        return self.child.vtable.resize(self.child.ptr, buf, buf_align, new_len, ret_addr);
-    }
-
-    fn remap(
-        ctx: *anyopaque,
-        memory: []u8,
-        alignment: std.mem.Alignment,
-        new_len: usize,
-        ret_addr: usize,
-    ) ?[*]u8 {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        // remap = free lama + alloc baru. Jadi update hitungannya
-        self.bytes_allocated -= memory.len;
-        self.bytes_allocated += new_len;
-        self.remap_count += 1;
-        return self.child.vtable.remap(self.child.ptr, memory, alignment, new_len, ret_addr);
-    }
-
-    fn free(
-        ctx: *anyopaque,
-        buf: []u8,
-        buf_align: std.mem.Alignment,
-        ret_addr: usize,
-    ) void {
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.bytes_allocated -= buf.len;
-        self.child.vtable.free(self.child.ptr, buf, buf_align, ret_addr);
-    }
-};
-//
-// //
-// //
-// //
 const Monster = struct {
     level: u32,
     grade: Grade,
@@ -94,27 +18,34 @@ const Monster = struct {
         wind,
         lightning,
     };
-
-    const Grade = enum {
-        a,
-        b,
-        c,
-        d,
-        e,
+    const Grade = enum { a, b, c, d, e };
+    const V2 = struct {
+        level: []u32,
+        grade: []Monster.Grade,
+        element: []Monster.Element,
+        name: [][]const u8,
     };
 };
 
-const MonsterV2 = struct {
-    level: []u32,
-    grade: []Monster.Grade,
-    element: []Monster.Element,
-    name: [][]const u8,
-};
+fn printGradeCount(
+    grade_arr: GradeArr,
+    writer: *Io.Writer,
+) !void {
+    inline for (std.enums.values(Monster.Grade)) |grade| {
+        try writer.print("Grade {c}: {d}\n", .{
+            std.ascii.toUpper(@tagName(grade)[0]),
+            grade_arr.get(grade),
+        });
+    }
+}
 
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     const gpa = arena.allocator();
     const io = init.io;
+
+    var stdout_writer = Io.File.stdout().writer(io, &.{});
+    const stdout = &stdout_writer.interface;
 
     var rand = std.Random.DefaultPrng.init(@intCast(std.Io.Timestamp.now(io, .real).toMicroseconds()));
     const rng = rand.random();
@@ -140,21 +71,18 @@ pub fn main(init: std.process.Init) !void {
         unreachable;
     };
 
-    std.debug.print("{d} Monsters\n", .{count});
+    try stdout.print("{d} Monsters\n", .{count});
     {
         const mons = try gpa.alloc(Monster, count);
-
-        var grade_arr: std.EnumArray(Monster.Grade, usize) = .initFill(0);
+        var grade_arr: GradeArr = .initFill(0);
 
         defer {
-            const free_time = std.Io.Clock.now(.awake, io);
+            const free_time = Clock.now(.awake, io);
             _ = arena.reset(.free_all);
-            // for (mons) |m| gpa.free(m.name);
-            //gpa.free(mons);
-            std.debug.print("Free Time: {f}\n", .{free_time.untilNow(io, .awake)});
+            stdout.print("Free Time: {f}\n", .{free_time.untilNow(io, .awake)}) catch unreachable;
         }
 
-        const gen_start = std.Io.Clock.now(.awake, io);
+        const gen_start = Clock.now(.awake, io);
         for (mons) |*m| {
             m.* = Monster{
                 .level = rng.intRangeAtMost(u32, 1, 100),
@@ -169,7 +97,7 @@ pub fn main(init: std.process.Init) !void {
             };
         }
         const gen_end = gen_start.untilNow(io, .awake);
-        const start = std.Io.Clock.now(.awake, io);
+        const start = Clock.now(.awake, io);
 
         const min_lvl, const max_lvl, const avg_lvl = blk: {
             var max: u32 = 0;
@@ -187,18 +115,13 @@ pub fn main(init: std.process.Init) !void {
         }
 
         const end = start.untilNow(io, .awake);
-        std.debug.print(
+        try stdout.print(
             \\AOS
             \\Gen: {f}
             \\Calc: {f}
             \\Min Lvl: {d}
             \\Max Lvl: {d}
             \\Avg Lvl: {d}
-            \\Grade A: {d}
-            \\Grade B: {d}
-            \\Grade C: {d}
-            \\Grade: D: {d}
-            \\Grade E: {d}
             \\
         , .{
             gen_end,
@@ -206,31 +129,28 @@ pub fn main(init: std.process.Init) !void {
             min_lvl,
             max_lvl,
             avg_lvl,
-            grade_arr.get(.a),
-            grade_arr.get(.b),
-            grade_arr.get(.c),
-            grade_arr.get(.d),
-            grade_arr.get(.e),
         });
+
+        try printGradeCount(grade_arr, stdout);
     }
 
     {
-        var mons: MonsterV2 = .{
+        var mons: Monster.V2 = .{
             .level = try gpa.alloc(u32, count),
             .grade = try gpa.alloc(Monster.Grade, count),
             .element = try gpa.alloc(Monster.Element, count),
             .name = try gpa.alloc([]const u8, count),
         };
 
-        var grade_arr: std.EnumArray(Monster.Grade, usize) = .initFill(0);
+        var grade_arr: GradeArr = .initFill(0);
 
         defer {
-            const free_time = std.Io.Clock.now(.awake, io);
+            const free_time = Clock.now(.awake, io);
             _ = arena.reset(.free_all);
-            std.debug.print("Free Time: {f}\n", .{free_time.untilNow(io, .awake)});
+            stdout.print("Free Time: {f}\n", .{free_time.untilNow(io, .awake)}) catch unreachable;
         }
 
-        const gen_start = std.Io.Clock.now(.awake, io);
+        const gen_start = Clock.now(.awake, io);
         for (0..count) |i| {
             mons.level[i] = rng.intRangeAtMost(u32, 1, 100);
             mons.element[i] = rng.enumValue(Monster.Element);
@@ -243,39 +163,23 @@ pub fn main(init: std.process.Init) !void {
             };
         }
         const gen_end = gen_start.untilNow(io, .awake);
-        const start = std.Io.Clock.now(.awake, io);
-        //
-        // const min_lvl, const max_lvl, const avg_lvl = blk: {
-        //     var max: u32 = 0;
-        //     var min: u32 = 1;
-        //     var sum: usize = 0;
-        //     for (mons.level) |m| {
-        //         min = @min(min, m);
-        //         max = @max(max, m);
-        //         sum += m;
-        //     }
-        //     break :blk .{ min, max, sum / count };
-        // };
+        const start = Clock.now(.awake, io);
 
         const min_lvl, const max_lvl, const avg_lvl = blk: {
-            const Vec = @Vector(4, u32); // 8x u32 = 256bit. Ganti 16 kalo CPU support AVX512
+            const Vec = @Vector(4, u32);
             const vec_len = mons.level.len / 4;
-            //const rem_len = mons.level.len % 8;
-
-            var vec_min: Vec = @splat(100); // init max
-            var vec_max: Vec = @splat(1); // init min
+            var vec_min: Vec = @splat(100);
+            var vec_max: Vec = @splat(1);
             var vec_sum: Vec = @splat(0);
 
-            // Loop vector
             for (0..vec_len) |i| {
                 const offset = i * 4;
-                const vec: Vec = mons.level[offset..][0..4].*; // load 8 u32 sekaligus
+                const vec: Vec = mons.level[offset..][0..4].*;
                 vec_min = @min(vec_min, vec);
                 vec_max = @max(vec_max, vec);
                 vec_sum += vec;
             }
 
-            // Reduce vector ke scalar
             var min: u32 = 100;
             var max: u32 = 1;
             var sum: usize = 0;
@@ -283,7 +187,6 @@ pub fn main(init: std.process.Init) !void {
             for (@as([4]u32, @bitCast(vec_max))) |v| max = @max(max, v);
             for (@as([4]u32, @bitCast(vec_sum))) |v| sum += v;
 
-            // Sisa yang nggak pas 8
             for (mons.level[vec_len * 4 ..]) |m| {
                 min = @min(min, m);
                 max = @max(max, m);
@@ -297,18 +200,13 @@ pub fn main(init: std.process.Init) !void {
 
         const end = start.untilNow(io, .awake);
 
-        std.debug.print(
+        try stdout.print(
             \\SOA
             \\Gen: {f}
             \\Calc: {f}
             \\Min Lvl: {d}
             \\Max Lvl: {d}
             \\Avg Lvl: {d}
-            \\Grade A: {d}
-            \\Grade B: {d}
-            \\Grade C: {d}
-            \\Grade: D: {d}
-            \\Grade E: {d}
             \\
         , .{
             gen_end,
@@ -316,25 +214,20 @@ pub fn main(init: std.process.Init) !void {
             min_lvl,
             max_lvl,
             avg_lvl,
-            grade_arr.get(.a),
-            grade_arr.get(.b),
-            grade_arr.get(.c),
-            grade_arr.get(.d),
-            grade_arr.get(.e),
         });
+        try printGradeCount(grade_arr, stdout);
     }
 
     {
         var mons: std.MultiArrayList(Monster) = try .initCapacity(gpa, count);
-        var grade_arr: std.EnumArray(Monster.Grade, usize) = .initFill(0);
+        var grade_arr: GradeArr = .initFill(0);
         defer {
-            const free_time = std.Io.Clock.now(.awake, io);
+            const free_time = Clock.now(.awake, io);
             _ = arena.reset(.free_all);
-
-            std.debug.print("Free Time: {f}\n", .{free_time.untilNow(io, .awake)});
+            stdout.print("Free Time: {f}\n", .{free_time.untilNow(io, .awake)}) catch unreachable;
         }
 
-        const gen_start = std.Io.Clock.now(.awake, io);
+        const gen_start = Clock.now(.awake, io);
         for (0..count) |_| {
             try mons.append(gpa, Monster{
                 .level = rng.intRangeAtMost(u32, 1, 100),
@@ -350,7 +243,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         const gen_end = gen_start.untilNow(io, .awake);
-        const start = std.Io.Clock.now(.awake, io);
+        const start = Clock.now(.awake, io);
 
         const min_lvl, const max_lvl, const avg_lvl = blk: {
             var max: u32 = 0;
@@ -358,7 +251,6 @@ pub fn main(init: std.process.Init) !void {
             var sum: usize = 0;
 
             for (mons.items(.level)) |m| {
-                //std.debug.print("Lvl: {d}\n", .{m});
                 min = @min(min, m);
                 max = @max(max, m);
                 sum += m;
@@ -376,11 +268,6 @@ pub fn main(init: std.process.Init) !void {
             \\Min Lvl: {d}
             \\Max Lvl: {d}
             \\Avg Lvl: {d}
-            \\Grade A: {d}
-            \\Grade B: {d}
-            \\Grade C: {d}
-            \\Grade: D: {d}
-            \\Grade E: {d}
             \\
         , .{
             gen_end,
@@ -388,11 +275,7 @@ pub fn main(init: std.process.Init) !void {
             min_lvl,
             max_lvl,
             avg_lvl,
-            grade_arr.get(.a),
-            grade_arr.get(.b),
-            grade_arr.get(.c),
-            grade_arr.get(.d),
-            grade_arr.get(.e),
         });
+        try printGradeCount(grade_arr, stdout);
     }
 }
