@@ -47,6 +47,9 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer = Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
+    var stderr_writer = Io.File.stderr().writer(io, &.{});
+    const stderr = &stderr_writer.interface;
+
     var rand = std.Random.DefaultPrng.init(@intCast(std.Io.Timestamp.now(io, .real).toMicroseconds()));
     const rng = rand.random();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -56,13 +59,14 @@ pub fn main(init: std.process.Init) !void {
             error.InvalidCharacter => {
                 for (args[1], 0..) |c, i| {
                     if (!std.ascii.isDigit(c)) {
-                        std.debug.print("./dod {s}\n", .{args[1]});
-                        for (0..(6 + i)) |_| std.debug.print(" ", .{});
-                        std.debug.print("^\n", .{});
-                        std.process.fatal("Invalid Char {c} at pos {d}\n", .{
+                        try stderr.print("./dod {s}\n", .{args[1]});
+                        _ = try stderr.splatByte(' ', 6 + i);
+                        try stderr.writeAll("^\n");
+                        try stderr.print("Invalid Char {c} at pos {d}\n", .{
                             c,
                             i + 1,
                         });
+                        std.process.exit(1);
                     }
                 }
             },
@@ -72,6 +76,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     try stdout.print("{d} Monsters\n", .{count});
+
     {
         const mons = try gpa.alloc(Monster, count);
         var grade_arr: GradeArr = .initFill(0);
