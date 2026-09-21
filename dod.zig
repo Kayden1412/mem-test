@@ -69,10 +69,10 @@ pub fn main(init: std.process.Init) !void {
     const count = std.fmt.parseInt(usize, if (args.len >= 3) args[2] else "100_000", 10) catch |err| {
         switch (err) {
             error.InvalidCharacter => {
-                for (args[1], 0..) |c, i| {
+                for (args[2], 0..) |c, i| {
                     if (!std.ascii.isDigit(c)) {
-                        try stderr.print("./{s} {s}\n", .{ program_name, args[1] });
-                        _ = try stderr.splatByte(' ', program_name.len + 3 + i);
+                        try stderr.print("{s} {s} {s}\n", .{ program_name, @tagName(mode), args[2] });
+                        _ = try stderr.splatByte(' ', program_name.len + args[1].len + i + 2);
                         try stderr.writeAll("^\n");
                         try stderr.print("Invalid Char {c} at pos {d}\n", .{
                             c,
