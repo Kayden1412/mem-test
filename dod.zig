@@ -65,7 +65,7 @@ pub fn main(init: std.process.Init) !void {
     const rng = rand.random();
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const program_name = args[0];
-    const mode = std.meta.stringToEnum(enum { aos, soa, mal }, if (args.len >= 1) args[1] else "") orelse .aos;
+    const mode = std.meta.stringToEnum(enum { aos, soa, mal }, if (args.len > 1) args[1] else "") orelse .aos;
     const count = std.fmt.parseInt(usize, if (args.len >= 3) args[2] else "100_000", 10) catch |err| {
         switch (err) {
             error.InvalidCharacter => {
